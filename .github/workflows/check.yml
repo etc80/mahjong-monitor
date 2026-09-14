@@ -1,29 +1,42 @@
-name: Check Mahjong website
+name: Mahjong Calendar Monitor
 
 on:
   workflow_dispatch:
   schedule:
     - cron: '*/30 * * * *'
 
+permissions:
+  contents: write
+
 jobs:
   check:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Check website
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python - <<'PY'
           import urllib.request
+          import urllib.parse
           import re
+          import os
+          import subprocess
           import sys
 
-          url = "http://mahjong-europe.org/ranking/Calendar.html"
-          target = "Graz Riichi Open 2026"
+          URL = "http://mahjong-europe.org/ranking/Calendar.html"
+          TARGET = "Graz Riichi Open 2026"
+          STATE_FILE = "state.txt"
 
-          print("Opening:", url)
+          print("Opening:", URL)
 
           request = urllib.request.Request(
-              url,
+              URL,
               headers={
                   "User-Agent": "Mozilla/5.0"
               }
@@ -34,8 +47,7 @@ jobs:
 
           print("Downloaded:", len(html), "bytes")
 
-          # Ищем элемент <p class="contenuCelluleG">,
-          # содержащий нужный турнир.
+          # Находим строку календаря, содержащую нужный турнир.
           pattern = re.compile(
               r'<p[^>]*class=["\']contenuCelluleG["\'][^>]*>'
               r'(.*?)'
@@ -46,7 +58,7 @@ jobs:
           match = None
 
           for m in pattern.finditer(html):
-              if target in m.group(1):
+              if TARGET in m.group(1):
                   match = m
                   break
 
@@ -62,23 +74,115 @@ jobs:
           print(element.strip())
           print("--------------------------------")
 
-          # Проверяем наличие ссылки непосредственно внутри элемента.
+          # Ищем ссылку, содержащую название турнира.
           link_match = re.search(
-              r'<a\b[^>]*>.*?'
-              + re.escape(target) +
-              r'.*?</a>',
+              r'<a\b[^>]*href\s*=\s*["\']([^"\']+)["\'][^>]*>'
+              r'\s*'
+              + re.escape(TARGET) +
+              r'\s*'
+              r'</a>',
               element,
               re.IGNORECASE | re.DOTALL
           )
 
-          if link_match:
-              link = link_match.group(0)
-
-              print()
-              print("RESULT: LINK FOUND")
-              print("Link:")
-              print(link.strip())
-          else:
+          if not link_match:
               print()
               print("RESULT: NOT A LINK")
+              sys.exit(0)
+
+          href = link_match.group(1)
+
+          # Превращаем относительный URL в абсолютный.
+          absolute_url = urllib.parse.urljoin(URL, href)
+
+          print()
+          print("RESULT: LINK FOUND")
+          print("URL:", absolute_url)
+
+          # Читаем предыдущее состояние.
+          previous_state = ""
+
+          if os.path.exists(STATE_FILE):
+              with open(STATE_FILE, "r", encoding="utf-8") as f:
+                  previous_state = f.read().strip()
+
+          current_state = absolute_url
+
+          # Если именно эта ссылка уже была обнаружена,
+          # повторно сообщение не отправляем.
+          if previous_state == current_state:
+              print("Already notified about this link.")
+              sys.exit(0)
+
+          print("New link detected!")
+          print("Sending Telegram notification...")
+
+          bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+          message = (
+              "🔔 Graz Riichi Open 2026 теперь доступен по ссылке!\n\n"
+              + absolute_url
+          )
+
+          telegram_url = (
+              "https://api.telegram.org/bot"
+              + bot_token
+              + "/sendMessage"
+          )
+
+          data = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": message
+          }).encode()
+
+          telegram_request = urllib.request.Request(
+              telegram_url,
+              data=data,
+              method="POST"
+          )
+
+          with urllib.request.urlopen(
+              telegram_request,
+              timeout=30
+          ) as response:
+              telegram_response = response.read().decode()
+
+          print("Telegram response:", telegram_response)
+
+          # Сохраняем состояние.
+          with open(STATE_FILE, "w", encoding="utf-8") as f:
+              f.write(current_state)
+
+          # Сохраняем состояние в Git.
+          subprocess.run(
+              ["git", "config", "user.name", "github-actions[bot]"],
+              check=True
+          )
+
+          subprocess.run(
+              ["git", "config", "user.email",
+               "41898282+github-actions[bot]@users.noreply.github.com"],
+              check=True
+          )
+
+          subprocess.run(
+              ["git", "add", STATE_FILE],
+              check=True
+          )
+
+          result = subprocess.run(
+              ["git", "commit", "-m", "Update monitor state"],
+              capture_output=True,
+              text=True
+          )
+
+          if result.returncode == 0:
+              subprocess.run(
+                  ["git", "push"],
+                  check=True
+              )
+              print("State saved.")
+          else:
+              print("Nothing to commit.")
           PY
