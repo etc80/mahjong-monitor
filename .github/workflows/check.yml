@@ -1,0 +1,66 @@
+name: Check Mahjong website
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/30 * * * *'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check website
+        run: |
+          python - <<'PY'
+          import urllib.request
+          import re
+
+          url = "http://mahjong-europe.org/ranking/Calendar.html"
+          target = "Graz Riichi Open 2026"
+
+          print("Opening:", url)
+
+          request = urllib.request.Request(
+              url,
+              headers={
+                  "User-Agent": "Mozilla/5.0"
+              }
+          )
+
+          with urllib.request.urlopen(request, timeout=30) as response:
+              html = response.read().decode("utf-8", errors="replace")
+
+          print("Downloaded:", len(html), "bytes")
+
+          # Ищем небольшой фрагмент HTML вокруг названия турнира
+          position = html.find(target)
+
+          if position == -1:
+              print("TARGET NOT FOUND")
+              raise SystemExit(1)
+
+          start = max(0, position - 300)
+          end = min(len(html), position + len(target) + 300)
+
+          fragment = html[start:end]
+
+          print()
+          print("HTML around target:")
+          print("--------------------------------")
+          print(fragment)
+          print("--------------------------------")
+
+          # Проверяем, находится ли текст внутри ссылки <a ...>
+          before = html[max(0, position - 1000):position]
+
+          last_open = before.lower().rfind("<a ")
+          last_close = before.lower().rfind("</a>")
+
+          if last_open > last_close:
+              print()
+              print("RESULT: TARGET IS INSIDE A LINK")
+          else:
+              print()
+              print("RESULT: TARGET IS NOT A LINK")
+          PY
