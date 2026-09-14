@@ -2,8 +2,13 @@ name: Mahjong Calendar Monitor
 
 on:
   workflow_dispatch:
+
   schedule:
-    - cron: '*/30 * * * *'
+    # 09:00 UTC
+    - cron: '0 9 * * *'
+
+    # 21:00 UTC
+    - cron: '0 21 * * *'
 
 permissions:
   contents: write
@@ -20,6 +25,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
         run: |
           python - <<'PY'
           import urllib.request
@@ -47,7 +53,7 @@ jobs:
 
           print("Downloaded:", len(html), "bytes")
 
-          # Находим строку календаря, содержащую нужный турнир.
+          # Ищем строку календаря, содержащую нужный турнир.
           pattern = re.compile(
               r'<p[^>]*class=["\']contenuCelluleG["\'][^>]*>'
               r'(.*?)'
@@ -63,16 +69,13 @@ jobs:
                   break
 
           if match is None:
-              print("ERROR: Tournament not found")
-              sys.exit(1)
+              print("Tournament not found")
+              sys.exit(0)
 
           element = match.group(1)
 
-          print()
           print("Tournament element:")
-          print("--------------------------------")
           print(element.strip())
-          print("--------------------------------")
 
           # Ищем ссылку, содержащую название турнира.
           link_match = re.search(
@@ -85,68 +88,33 @@ jobs:
               re.IGNORECASE | re.DOTALL
           )
 
+          # Ссылки пока нет — просто завершаем работу.
           if not link_match:
-              print()
               print("RESULT: NOT A LINK")
-              
-              bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
-              chat_id = os.environ["TELEGRAM_CHAT_ID"]
-          
-              message = "🧪 Тест мониторинга Mahjong: Telegram работает!"
-          
-              telegram_url = (
-                  "https://api.telegram.org/bot"
-                  + bot_token
-                  + "/sendMessage"
-              )
-          
-              data = urllib.parse.urlencode({
-                  "chat_id": chat_id,
-                  "text": message
-              }).encode()
-          
-              telegram_request = urllib.request.Request(
-                  telegram_url,
-                  data=data,
-                  method="POST"
-              )
-
-              with urllib.request.urlopen(
-                  telegram_request,
-                  timeout=30
-              ) as response:
-                  telegram_response = response.read().decode()
-          
-              print("Telegram response:", telegram_response)
-          
               sys.exit(0)
 
           href = link_match.group(1)
 
-          # Превращаем относительный URL в абсолютный.
+          # Если ссылка относительная — превращаем её в абсолютную.
           absolute_url = urllib.parse.urljoin(URL, href)
 
-          print()
           print("RESULT: LINK FOUND")
           print("URL:", absolute_url)
 
-          # Читаем предыдущее состояние.
+          # Проверяем, отправляли ли мы уже уведомление
+          # об этой ссылке.
           previous_state = ""
 
           if os.path.exists(STATE_FILE):
               with open(STATE_FILE, "r", encoding="utf-8") as f:
                   previous_state = f.read().strip()
 
-          current_state = absolute_url
-
-          # Если именно эта ссылка уже была обнаружена,
-          # повторно сообщение не отправляем.
-          if previous_state == current_state:
-              print("Already notified about this link.")
+          if previous_state == absolute_url:
+              print("Notification already sent.")
               sys.exit(0)
 
-          print("New link detected!")
-          print("Sending Telegram notification...")
+          # Новая ссылка — отправляем Telegram.
+          print("NEW LINK DETECTED!")
 
           bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
           chat_id = os.environ["TELEGRAM_CHAT_ID"]
@@ -181,9 +149,9 @@ jobs:
 
           print("Telegram response:", telegram_response)
 
-          # Сохраняем состояние.
+          # Запоминаем URL, чтобы повторно не уведомлять.
           with open(STATE_FILE, "w", encoding="utf-8") as f:
-              f.write(current_state)
+              f.write(absolute_url)
 
           # Сохраняем состояние в Git.
           subprocess.run(
@@ -192,8 +160,12 @@ jobs:
           )
 
           subprocess.run(
-              ["git", "config", "user.email",
-               "41898282+github-actions[bot]@users.noreply.github.com"],
+              [
+                  "git",
+                  "config",
+                  "user.email",
+                  "41898282+github-actions[bot]@users.noreply.github.com"
+              ],
               check=True
           )
 
@@ -203,7 +175,12 @@ jobs:
           )
 
           result = subprocess.run(
-              ["git", "commit", "-m", "Update monitor state"],
+              [
+                  "git",
+                  "commit",
+                  "-m",
+                  "Save detected link"
+              ],
               capture_output=True,
               text=True
           )
@@ -213,7 +190,8 @@ jobs:
                   ["git", "push"],
                   check=True
               )
+
               print("State saved.")
           else:
-              print("Nothing to commit.")
+              print("State was not changed.")
           PY
