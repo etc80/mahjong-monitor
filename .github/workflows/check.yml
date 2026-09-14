@@ -15,6 +15,7 @@ jobs:
           python - <<'PY'
           import urllib.request
           import re
+          import sys
 
           url = "http://mahjong-europe.org/ranking/Calendar.html"
           target = "Graz Riichi Open 2026"
@@ -33,34 +34,51 @@ jobs:
 
           print("Downloaded:", len(html), "bytes")
 
-          # Ищем небольшой фрагмент HTML вокруг названия турнира
-          position = html.find(target)
+          # Ищем элемент <p class="contenuCelluleG">,
+          # содержащий нужный турнир.
+          pattern = re.compile(
+              r'<p[^>]*class=["\']contenuCelluleG["\'][^>]*>'
+              r'(.*?)'
+              r'</p>',
+              re.IGNORECASE | re.DOTALL
+          )
 
-          if position == -1:
-              print("TARGET NOT FOUND")
-              raise SystemExit(1)
+          match = None
 
-          start = max(0, position - 300)
-          end = min(len(html), position + len(target) + 300)
+          for m in pattern.finditer(html):
+              if target in m.group(1):
+                  match = m
+                  break
 
-          fragment = html[start:end]
+          if match is None:
+              print("ERROR: Tournament not found")
+              sys.exit(1)
+
+          element = match.group(1)
 
           print()
-          print("HTML around target:")
+          print("Tournament element:")
           print("--------------------------------")
-          print(fragment)
+          print(element.strip())
           print("--------------------------------")
 
-          # Проверяем, находится ли текст внутри ссылки <a ...>
-          before = html[max(0, position - 1000):position]
+          # Проверяем наличие ссылки непосредственно внутри элемента.
+          link_match = re.search(
+              r'<a\b[^>]*>.*?'
+              + re.escape(target) +
+              r'.*?</a>',
+              element,
+              re.IGNORECASE | re.DOTALL
+          )
 
-          last_open = before.lower().rfind("<a ")
-          last_close = before.lower().rfind("</a>")
+          if link_match:
+              link = link_match.group(0)
 
-          if last_open > last_close:
               print()
-              print("RESULT: TARGET IS INSIDE A LINK")
+              print("RESULT: LINK FOUND")
+              print("Link:")
+              print(link.strip())
           else:
               print()
-              print("RESULT: TARGET IS NOT A LINK")
+              print("RESULT: NOT A LINK")
           PY
